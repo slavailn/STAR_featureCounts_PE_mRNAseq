@@ -1,0 +1,55 @@
+// Global Vars
+PROJECT_DIR="path/to/project_dir"
+GENOME_INDEX="path/to/STARindex_dir"
+ANNOTATION="path/to/gff" // normally annotation is gtf format, make changes accordingly
+BBMAP_PATH="path/to/bbmap_dir"
+STRANDNESS=<0,1 or 2> // 0 - unstranded, 1 - firststrand, 2 - secondstrand
+NUM_THREADS=<number_threads[integer]>
+
+
+// This pipeline takes paired-end RNA-seq reads downloaded from SRA archive, repairs them
+// using repair.sh script from bbtools, maps them to the reference genome, and counts reads mapping to features.
+// I included the repair step, since paired-end files from SRA archive may contain singletons.
+
+repair_PE = {
+               // Fix fastq files downloaded from SRA, the issue is the presence of singletons
+               
+               output.dir = "$PROJECT_DIR/fixed"
+               filter("fixed","fixed") 
+               {
+                  exec """
+                           $BBMAP_PATH/repair.sh in1=$input1 in2=$input2 out1=$output1 out2=$output2 repair
+                       """
+               }                        
+             }  
+
+
+align_PE = {
+             // Align paired-end reads to the genome using STAR
+             output.dir = "$PROJECT_DIR/align"
+             transform("(.*)_1.fixed.fastq","(.*)_2.fixed.fastq") to ("\$1.Aligned.sortedByCoord.out.bam") 
+             {
+                exec """
+                         STAR --genomeDir $GENOME_INDEX --readFilesIn $input1.fixed.fastq $input2.fixed.fastq
+	                 --outFileNamePrefix ${output.prefix.prefix.prefix.prefix}. --outSAMtype BAM SortedByCoordinate 
+                         --runThreadN $NUM_THREADS
+                     """
+             }
+           }
+             
+count_reads = {
+                   //Count reads across features, note that with this annotation the gene_id is "Parent"
+                   // This stage generates a separate count file for every BAM file of input 
+                   doc "Count reads mapping to features"
+                   output.dir = "counts"
+
+                   transform("(.*).Aligned.sortedByCoord.out.bam") to ("\$1.counts") 
+                   {
+                    exec """
+                           featureCounts -a $ANNOTATION -o $output -s $STRANDNESS 
+                                         -T $NUM_THREADS $input
+                         """
+                   }
+}
+
+Bpipe.run { "%_*.fastq" * [ repair_PE + align_PE + count_reads ] }
